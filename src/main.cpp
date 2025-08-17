@@ -1,201 +1,149 @@
-#include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
-#include <SDL3/SDL_init.h>
-#include <SDL3_ttf/SDL_ttf.h>
-#include <SDL3_mixer/SDL_mixer.h>
-#include <SDL3_image/SDL_image.h>
-#include <cmath>
-#include <string_view>
-#include <filesystem>
-#include <thread>
 
-constexpr uint32_t windowStartWidth = 400;
-constexpr uint32_t windowStartHeight = 400;
-
-struct AppContext {
-    SDL_Window* window;
-    SDL_Renderer* renderer;
-    SDL_Texture* messageTex, *imageTex;
-    SDL_FRect messageDest;
-    SDL_AudioDeviceID audioDevice;
-    MIX_Track* track;
-    SDL_AppResult app_quit = SDL_APP_CONTINUE;
-};
-
-SDL_AppResult SDL_Fail(){
-    SDL_LogError(SDL_LOG_CATEGORY_CUSTOM, "Error %s", SDL_GetError());
-    return SDL_APP_FAILURE;
-}
-
-SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
-    // init the library, here we make a window so we only need the Video capabilities.
-    if (not SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)){
-        return SDL_Fail();
+SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
+{
+    if (!SDL_SetAppMetadata("Example splitscreen shooter game", "1.0", "com.example.woodeneye-008")) {
+        return SDL_APP_FAILURE;
     }
-    
-    // init TTF
-    if (not TTF_Init()) {
-        return SDL_Fail();
-    }
-    
-    // init Mixer
-    if (not MIX_Init()) {
-        return SDL_Fail();
-    }
-    
-    // create a window
-   
-    SDL_Window* window = SDL_CreateWindow("SDL Minimal Sample", windowStartWidth, windowStartHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (not window){
-        return SDL_Fail();
-    }
-    
-    // create a renderer
-    SDL_Renderer* renderer = SDL_CreateRenderer(window, NULL);
-    if (not renderer){
-        return SDL_Fail();
-    }
-    
-    // load the font
-#if __ANDROID__
-    std::filesystem::path basePath = "";   // on Android we do not want to use basepath. Instead, assets are available at the root directory.
-#else
-    auto basePathPtr = SDL_GetBasePath();
-     if (not basePathPtr){
-        return SDL_Fail();
-    }
-     const std::filesystem::path basePath = basePathPtr;
-#endif
-
-    const auto fontPath = basePath / "Inter-VariableFont.ttf";
-    TTF_Font* font = TTF_OpenFont(fontPath.string().c_str(), 36);
-    if (not font) {
-        return SDL_Fail();
-    }
-
-    // render the font to a surface
-    const std::string_view text = "Hello SDL!";
-    SDL_Surface* surfaceMessage = TTF_RenderText_Solid(font, text.data(), text.length(), { 255,255,255 });
-
-    // make a texture from the surface
-    SDL_Texture* messageTex = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
-
-    // we no longer need the font or the surface, so we can destroy those now.
-    TTF_CloseFont(font);
-    SDL_DestroySurface(surfaceMessage);
-
-    // load the SVG
-    auto svg_surface = IMG_Load((basePath / "gs_tiger.svg").string().c_str());
-    SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, svg_surface);
-    SDL_DestroySurface(svg_surface);
-    
-
-    // get the on-screen dimensions of the text. this is necessary for rendering it
-    auto messageTexProps = SDL_GetTextureProperties(messageTex);
-    SDL_FRect text_rect{
-            .x = 0,
-            .y = 0,
-            .w = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_WIDTH_NUMBER, 0)),
-            .h = float(SDL_GetNumberProperty(messageTexProps, SDL_PROP_TEXTURE_HEIGHT_NUMBER, 0))
-    };
-
-    // init SDL Mixer
-    MIX_Mixer* mixer = MIX_CreateMixerDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
-    if (mixer == nullptr) {
-        return SDL_Fail();
-    }
-    
-    auto mixerTrack = MIX_CreateTrack(mixer);
-
-    // load the music
-    auto musicPath = basePath / "the_entertainer.ogg";
-    auto music = MIX_LoadAudio(mixer,musicPath.string().c_str(),false);
-    if (not music) {
-        return SDL_Fail();
-    }
-
-    // play the music (does not loop)
-    MIX_SetTrackAudio(mixerTrack, music);
-    MIX_PlayTrack(mixerTrack, NULL);
-    
-    // print some information about the window
-    SDL_ShowWindow(window);
-    {
-        int width, height, bbwidth, bbheight;
-        SDL_GetWindowSize(window, &width, &height);
-        SDL_GetWindowSizeInPixels(window, &bbwidth, &bbheight);
-        SDL_Log("Window size: %ix%i", width, height);
-        SDL_Log("Backbuffer size: %ix%i", bbwidth, bbheight);
-        if (width != bbwidth){
-            SDL_Log("This is a highdpi environment.");
+    int i;
+    for (i = 0; i < SDL_arraysize(extended_metadata); i++) {
+        if (!SDL_SetAppMetadataProperty(extended_metadata[i].key, extended_metadata[i].value)) {
+            return SDL_APP_FAILURE;
         }
     }
 
-    // set up the application data
-    *appstate = new AppContext{
-       .window = window,
-       .renderer = renderer,
-       .messageTex = messageTex,
-       .imageTex = tex,
-       .messageDest = text_rect,
-       .track = mixerTrack,
-    };
-    
-    SDL_SetRenderVSync(renderer, -1);   // enable vysnc
-    
-    SDL_Log("Application started successfully!");
+    AppState *as = (AppState*)SDL_calloc(1, sizeof(AppState));
+    if (!as) {
+        return SDL_APP_FAILURE;
+    } else {
+        *appstate = as;
+    }
 
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        return SDL_APP_FAILURE;
+    }
+    if (!SDL_CreateWindowAndRenderer("examples/demo/woodeneye-008", 640, 480, 0, &as->window, &as->renderer)) {
+        return SDL_APP_FAILURE;
+    }
+
+    as->player_count = 1;
+    initPlayers(as->players, MAX_PLAYER_COUNT);
+    initEdges(MAP_BOX_SCALE, as->edges, MAP_BOX_EDGES_LEN);
+    debug_string[0] = 0;
+
+    SDL_SetRenderVSync(as->renderer, false);
+    SDL_SetWindowRelativeMouseMode(as->window, true);
+    SDL_SetHintWithPriority(SDL_HINT_WINDOWS_RAW_KEYBOARD, "1", SDL_HINT_OVERRIDE);
     return SDL_APP_CONTINUE;
 }
 
-SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event* event) {
-    auto* app = (AppContext*)appstate;
-    
-    if (event->type == SDL_EVENT_QUIT) {
-        app->app_quit = SDL_APP_SUCCESS;
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
+{
+   AppState *as = (AppState*)appstate;
+    int player_count = as->player_count;
+    int i;
+    switch (event->type) {
+        case SDL_EVENT_QUIT:
+            return SDL_APP_SUCCESS;
+            break;
+        case SDL_EVENT_MOUSE_REMOVED:
+            for (i = 0; i < player_count; i++) {
+                if (as->players[i].mouse == event->mdevice.which) {
+                    as->players[i].mouse = 0;
+                }
+            }
+            break;
+        case SDL_EVENT_KEYBOARD_REMOVED:
+            for (i = 0; i < player_count; i++) {
+                if (as->players[i].keyboard == event->kdevice.which) {
+                    as->players[i].keyboard = 0;
+                }
+            }
+            break;
+        case SDL_EVENT_MOUSE_MOTION: {
+            SDL_MouseID id = event->motion.which;
+            int index = whoseMouse(id, as->players, as->player_count);
+            if (index >= 0) {
+                as->players[index].yaw -= ((int)event->motion.xrel) * 0x00080000;
+                as->players[index].pitch = SDL_max(-0x40000000, SDL_min(0x40000000, as->players[index].pitch - ((int)event->motion.yrel) * 0x00080000));
+            } else if (id) {
+                for (i = 0; i < MAX_PLAYER_COUNT; i++) {
+                    if (as->players[i].mouse == 0) {
+                        as->players[i].mouse = id;
+                        as->player_count = SDL_max(as->player_count, i + 1);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+            SDL_MouseID id = event->button.which;
+            int index = whoseMouse(id, as->players, as->player_count);
+            if (index >= 0) {
+                shoot(index, as->players, as->player_count);
+            }
+            break;
+        }
+        case SDL_EVENT_KEY_DOWN: {
+            SDL_Keycode sym = event->key.key;
+            SDL_KeyboardID id = event->key.which;
+            int index = whoseKeyboard(id, as->players, as->player_count);
+            if (index >= 0) {
+                if (sym == SDLK_W) as->players[index].wasd |= 1;
+                if (sym == SDLK_A) as->players[index].wasd |= 2;
+                if (sym == SDLK_S) as->players[index].wasd |= 4;
+                if (sym == SDLK_D) as->players[index].wasd |= 8;
+                if (sym == SDLK_SPACE) as->players[index].wasd |= 16;
+            } else if (id) {
+                for (i = 0; i < MAX_PLAYER_COUNT; i++) {
+                    if (as->players[i].keyboard == 0) {
+                        as->players[i].keyboard = id;
+                        as->player_count = SDL_max(as->player_count, i + 1);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case SDL_EVENT_KEY_UP: {
+            SDL_Keycode sym = event->key.key;
+            SDL_KeyboardID id = event->key.which;
+            if (sym == SDLK_ESCAPE) return SDL_APP_SUCCESS;
+            int index = whoseKeyboard(id, as->players, as->player_count);
+            if (index >= 0) {
+                if (sym == SDLK_W) as->players[index].wasd &= 30;
+                if (sym == SDLK_A) as->players[index].wasd &= 29;
+                if (sym == SDLK_S) as->players[index].wasd &= 27;
+                if (sym == SDLK_D) as->players[index].wasd &= 23;
+                if (sym == SDLK_SPACE) as->players[index].wasd &= 15;
+            }
+            break;
+        }
     }
-
     return SDL_APP_CONTINUE;
 }
 
-SDL_AppResult SDL_AppIterate(void *appstate) {
-    auto* app = (AppContext*)appstate;
-
-    // draw a color
-    auto time = SDL_GetTicks() / 1000.f;
-    auto red = (std::sin(time) + 1) / 2.0 * 255;
-    auto green = (std::sin(time / 2) + 1) / 2.0 * 255;
-    auto blue = (std::sin(time) * 2 + 1) / 2.0 * 255;
-    
-    SDL_SetRenderDrawColor(app->renderer, red, green, blue, SDL_ALPHA_OPAQUE);
-    SDL_RenderClear(app->renderer);
-
-    // Renderer uses the painter's algorithm to make the text appear above the image, we must render the image first.
-    SDL_RenderTexture(app->renderer, app->imageTex, NULL, NULL);
-    SDL_RenderTexture(app->renderer, app->messageTex, NULL, &app->messageDest);
-
-    SDL_RenderPresent(app->renderer);
-
-    return app->app_quit;
-}
-
-void SDL_AppQuit(void* appstate, SDL_AppResult result) {
-    auto* app = (AppContext*)appstate;
-    if (app) {
-        SDL_DestroyRenderer(app->renderer);
-        SDL_DestroyWindow(app->window);
-        
-        // prevent the music from abruptly ending.
-        MIX_StopTrack(app->track, MIX_TrackMSToFrames(app->track, 1000));
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        //Mix_FreeMusic(app->music); // this call blocks until the music has finished fading
-        SDL_CloseAudioDevice(app->audioDevice);
-
-        delete app;
+SDL_AppResult SDL_AppIterate(void *appstate)
+{
+    AppState *as = (AppState*)appstate;
+    static Uint64 accu = 0;
+    static Uint64 last = 0;
+    static Uint64 past = 0;
+    Uint64 now = SDL_GetTicksNS();
+    Uint64 dt_ns = now - past;
+    update(as->players, as->player_count, dt_ns);
+    draw(as->renderer, (const float (*)[6])as->edges, as->players, as->player_count);
+    if (now - last > 999999999) {
+        last = now;
+        SDL_snprintf(debug_string, sizeof(debug_string), "%" SDL_PRIu64 " fps", accu);
+        accu = 0;
     }
-    TTF_Quit();
-    MIX_Quit();
-
-    SDL_Log("Application quit successfully!");
-    SDL_Quit();
+    past = now;
+    accu += 1;
+    Uint64 elapsed = SDL_GetTicksNS() - now;
+    if (elapsed < 999999) {
+        SDL_DelayNS(999999 - elapsed);
+    }
+    return SDL_APP_CONTINUE;
 }
